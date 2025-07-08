@@ -64,3 +64,77 @@ jobs:
 
     - name: Show Output
       run: echo ${{ steps.deploy.outputs.url }}
+    - name: Wait for service to be ready
+      run: |
+        echo "Waiting for service to be ready..."
+        sleep 30
+        
+    - name: Run Smoke Tests
+      id: smoke_tests
+      run: |
+        SERVICE_URL=${{ steps.deploy.outputs.url }}
+        echo "Running smoke tests against: $SERVICE_URL"
+        
+        # Test 1: Health check
+        echo "🔍 Testing health endpoint..."
+        HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/")
+        if [ "$HEALTH_STATUS" != "200" ]; then
+          echo "❌ Health check failed with status: $HEALTH_STATUS"
+          exit 1
+        fi
+        echo "✅ Health check passed"
+        
+        # Test 2: Get all trips
+        echo "🔍 Testing GET /trip endpoint..."
+        TRIPS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/trip")
+        if [ "$TRIPS_STATUS" != "200" ]; then
+          echo "❌ GET /trip failed with status: $TRIPS_STATUS"
+          exit 1
+        fi
+        echo "✅ GET /trip endpoint working"
+        
+        # Test 3: Create a test trip
+        echo "🔍 Testing POST /trip endpoint..."
+        CREATE_RESPONSE=$(curl -s -w "%{http_code}" -X POST "$SERVICE_URL/trip" \
+          -H "Content-Type: application/json" \
+          -d '{"name": "Test Trip", "description": "Smoke test trip", "joiner_total_count": 5}')
+        
+        # Extract status code (last 3 characters)
+        CREATE_STATUS="${CREATE_RESPONSE: -3}"
+        if [ "$CREATE_STATUS" != "201" ]; then
+          echo "❌ POST /trip failed with status: $CREATE_STATUS"
+          exit 1
+        fi
+        echo "✅ POST /trip endpoint working"
+        
+        # Test 4: Get specific trip (assuming ID 1 exists after creation)
+        echo "🔍 Testing GET /trip/{id} endpoint..."
+        GET_TRIP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/trip/1")
+        if [ "$GET_TRIP_STATUS" != "200" ]; then
+          echo "❌ GET /trip/1 failed with status: $GET_TRIP_STATUS"
+          exit 1
+        fi
+        echo "✅ GET /trip/{id} endpoint working"
+        
+        echo "🎉 All smoke tests passed!"
+        echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
+
+    - name: Notify Success
+      if: success()
+      run: |
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -d '{
+            "text": "🎉 *Deployment Success!*\n\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Service URL:* ${{ steps.smoke_tests.outputs.SERVICE_URL }}\n*Workflow:* ${{ github.workflow }}\n\n✅ All smoke tests passed!\n\n*Time:* $(date)"
+          }' \
+          ${{ secrets.SLACK_WEBHOOK_URL }} || echo "Slack notification failed"
+
+    - name: Notify Failure
+      if: failure()
+      run: |
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -d '{
+            "text": "❌ *Deployment Failed!*\n\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Workflow:* ${{ github.workflow }}\n*Job:* ${{ github.job }}\n\n🔗 [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n\n*Time:* $(date)"
+          }' \
+          ${{ secrets.SLACK_WEBHOOK_URL }} || echo "Slack notification failed"
