@@ -122,20 +122,22 @@ jobs:
     - name: Notify Success
       if: success()
       run: |
+        NOW=$(date)
         curl -X POST \
           -H "Content-Type: application/json" \
           -d '{
-            "text": "🎉 *Deployment Success!*\n\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Service URL:* ${{ steps.smoke_tests.outputs.SERVICE_URL }}\n*Workflow:* ${{ github.workflow }}\n\n✅ All smoke tests passed!\n\n*Time:* $(date)"
+            "text": "🎉 *Deployment Success!*\n\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Service URL:* ${{ steps.smoke_tests.outputs.SERVICE_URL }}\n*Workflow:* ${{ github.workflow }}\n\n✅ All smoke tests passed!\n\n*Time:* $NOW\"
           }' \
           ${{ secrets.SLACK_WEBHOOK_URL }} || echo "Slack notification failed"
 
     - name: Notify Failure
       if: failure()
       run: |
+        NOW=$(date)
         curl -X POST \
           -H "Content-Type: application/json" \
           -d '{
-            "text": "❌ *Deployment Failed!*\n\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Workflow:* ${{ github.workflow }}\n*Job:* ${{ github.job }}\n\n🔗 [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n\n*Time:* $(date)"
+            "text": "❌ *Deployment Failed!*\n\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Workflow:* ${{ github.workflow }}\n*Job:* ${{ github.job }}\n\n🔗 [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n\n*Time:* $NOW\)"
           }' \
           ${{ secrets.SLACK_WEBHOOK_URL }} || echo "Slack notification failed"
 
