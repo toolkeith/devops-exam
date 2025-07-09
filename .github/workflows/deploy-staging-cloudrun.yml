@@ -122,7 +122,7 @@ jobs:
     - name: Notify Success
       if: success()
       run: |
-        NOW=$(date)
+        NOW=$(TZ='Asia/Manila' date)
         curl -X POST \
           -H "Content-Type: application/json" \
           -d "{
@@ -134,7 +134,7 @@ jobs:
     - name: Notify Failure
       if: failure()
       run: |
-        NOW=$(date)
+        NOW=$(TZ='Asia/Manila' date)
         curl -X POST \
           -H "Content-Type: application/json" \
           -d "{
