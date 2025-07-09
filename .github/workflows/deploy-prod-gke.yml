@@ -1,0 +1,190 @@
+name: Deploy to Production - GKE
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GAR_LOCATION: asia-southeast1
+  GKE_CLUSTER: fastapi-prod-cluster
+  GKE_ZONE: asia-southeast1-a
+  DEPLOYMENT_NAME: fastapi-app-prod
+  REPOSITORY: fastapi-repo
+  IMAGE: fastapi-app-prod
+  NAMESPACE: production
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy to GKE
+    runs-on: ubuntu-latest
+    environment: production
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Docker to use gcloud as a credential helper
+      run: |-
+        gcloud auth configure-docker $GAR_LOCATION-docker.pkg.dev
+
+    - name: Get GKE credentials
+      run: |-
+        gcloud container clusters get-credentials "$GKE_CLUSTER" --zone "$GKE_ZONE"
+
+    - name: Build Docker image
+      run: |-
+        docker build \
+          --tag "$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$GITHUB_SHA" \
+          --tag "$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:latest" \
+          .
+
+    - name: Push Docker image
+      run: |-
+        docker push "$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$GITHUB_SHA"
+        docker push "$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:latest"
+
+    - name: Create namespace if not exists
+      run: |-
+        kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+
+    - name: Deploy to GKE
+      run: |-
+        # Replace image in deployment manifest
+        sed -i "s|IMAGE_URL|$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$GITHUB_SHA|g" k8s/deployment.yaml
+        sed -i "s|NAMESPACE_PLACEHOLDER|$NAMESPACE|g" k8s/deployment.yaml
+        sed -i "s|DEPLOYMENT_NAME_PLACEHOLDER|$DEPLOYMENT_NAME|g" k8s/deployment.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f k8s/ -n $NAMESPACE
+
+    - name: Verify deployment
+      run: |-
+        kubectl rollout status deployment/$DEPLOYMENT_NAME -n $NAMESPACE --timeout=600s
+        kubectl get services -o wide -n $NAMESPACE
+
+    - name: Get Load Balancer IP
+      id: get_ip
+      run: |-
+        # Wait for external IP to be assigned
+        echo "Waiting for external IP..."
+        for i in {1..30}; do
+          EXTERNAL_IP=$(kubectl get svc fastapi-service -n $NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          if [ ! -z "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
+            echo "External IP: $EXTERNAL_IP"
+            echo "EXTERNAL_IP=$EXTERNAL_IP" >> $GITHUB_OUTPUT
+            break
+          fi
+          echo "Waiting for external IP... ($i/30)"
+          sleep 10
+        done
+        
+        if [ -z "$EXTERNAL_IP" ] || [ "$EXTERNAL_IP" == "null" ]; then
+          echo "Failed to get external IP"
+          exit 1
+        fi
+
+    - name: Wait for pods to be ready
+      run: |-
+        echo "Waiting for pods to be ready..."
+        kubectl wait --for=condition=ready pod -l app=$DEPLOYMENT_NAME -n $NAMESPACE --timeout=300s
+
+    - name: Run Health Check
+      id: health_check
+      run: |-
+        EXTERNAL_IP=${{ steps.get_ip.outputs.EXTERNAL_IP }}
+        SERVICE_URL="http://$EXTERNAL_IP"
+        
+        echo "Running health check against: $SERVICE_URL"
+        
+        # Wait a bit more for the service to be fully ready
+        sleep 30
+        
+        # Health check with retries
+        for i in {1..10}; do
+          echo "Health check attempt $i/10..."
+          HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/" || echo "000")
+          if [ "$HEALTH_STATUS" == "200" ]; then
+            echo "✅ Health check passed"
+            echo "SERVICE_URL=$SERVICE_URL" >> $GITHUB_OUTPUT
+            break
+          fi
+          echo "Health check failed with status: $HEALTH_STATUS, retrying in 10s..."
+          sleep 10
+        done
+        
+        if [ "$HEALTH_STATUS" != "200" ]; then
+          echo "❌ Health check failed after all retries"
+          exit 1
+        fi
+
+    - name: Run API Tests
+      run: |-
+        SERVICE_URL=${{ steps.health_check.outputs.SERVICE_URL }}
+        echo "Running API tests against: $SERVICE_URL"
+        
+        # Test GET /trip
+        echo "🔍 Testing GET /trip endpoint..."
+        TRIPS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/trip")
+        if [ "$TRIPS_STATUS" != "200" ]; then
+          echo "❌ GET /trip failed with status: $TRIPS_STATUS"
+          exit 1
+        fi
+        echo "✅ GET /trip endpoint working"
+        
+        # Test POST /trip
+        echo "🔍 Testing POST /trip endpoint..."
+        CREATE_RESPONSE=$(curl -s -w "%{http_code}" -X POST "$SERVICE_URL/trip" \
+          -H "Content-Type: application/json" \
+          -d '{"name": "Production Test Trip", "description": "Production deployment test", "joiner_total_count": 10}')
+        
+        CREATE_STATUS="${CREATE_RESPONSE: -3}"
+        if [ "$CREATE_STATUS" != "201" ]; then
+          echo "❌ POST /trip failed with status: $CREATE_STATUS"
+          exit 1
+        fi
+        echo "✅ POST /trip endpoint working"
+        
+        echo "🎉 All API tests passed!"
+
+    - name: Notify Success
+      if: success()
+      run: |
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -d '{
+            "text": "🚀 *Production Deployment Success!*\n\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Service URL:* ${{ steps.health_check.outputs.SERVICE_URL }}\n*Cluster:* ${{ env.GKE_CLUSTER }}\n*Namespace:* ${{ env.NAMESPACE }}\n*Workflow:* ${{ github.workflow }}\n\n✅ All tests passed!\n\n*Time:* $(date)"
+          }' \
+          ${{ secrets.SLACK_WEBHOOK_URL }} || echo "Slack notification failed"
+
+    - name: Notify Failure
+      if: failure()
+      run: |
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -d '{
+            "text": "❌ *Production Deployment Failed!*\n\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Workflow:* ${{ github.workflow }}\n*Job:* ${{ github.job }}\n*Cluster:* ${{ env.GKE_CLUSTER }}\n\n🔗 [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n\n*Time:* $(date)"
+          }' \
+          ${{ secrets.SLACK_WEBHOOK_URL }} || echo "Slack notification failed"

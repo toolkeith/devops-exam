@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - Staging
+name: Deploy to Staging - CloudRun
 
 on:
   push:
@@ -138,3 +138,4 @@ jobs:
             "text": "❌ *Deployment Failed!*\n\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ github.ref_name }}\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Workflow:* ${{ github.workflow }}\n*Job:* ${{ github.job }}\n\n🔗 [View Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n\n*Time:* $(date)"
           }' \
           ${{ secrets.SLACK_WEBHOOK_URL }} || echo "Slack notification failed"
+
