@@ -1,0 +1,72 @@
+# FastAPI App Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fastapi-secret
+type: Opaque
+data:
+  db-connection-string: bXlzcWwrcHlteXNxbDovL3Jvb3Q6cm9vdHBhc3N3b3JkQGZhc3RhcGlkYi1zZXJ2aWNlOjMzMDYvdGVzdGRi  # base64 encoded 'mysql+pymysql://root:rootpassword@fastapidb-service:3306/testdb'
+---
+# FastAPI Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi-app
+  labels:
+    app: fastapi-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: fastapi-app
+  template:
+    metadata:
+      labels:
+        app: fastapi-app
+    spec:
+      containers:
+      - name: fastapi-app
+        image: asia-southeast1-docker.pkg.dev/devops-exam-071025/fastapi-repo/fastapi-app-prod:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DB_CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: fastapi-secret
+              key: db-connection-string
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+# FastAPI Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi-service
+  labels:
+    app: fastapi-app
+spec:
+  selector:
+    app: fastapi-app
+  ports:
+  - port: 80
+    targetPort: 8000
+  type: ClusterIP
+---
