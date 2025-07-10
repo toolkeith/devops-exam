@@ -13,8 +13,6 @@ metadata:
     ingress.gcp.kubernetes.io/force-ssl-redirect: "true"
     # Managed certificate
     networking.gke.io/managed-certificates: "fastapi-ssl-cert"
-    # Optional: Enable Cloud Armor for security
-    # cloud.google.com/armor-config: '{"default-security-policy": "cloud-armor-policy"}'
 spec:
   rules:
   - host: toolkeith.me
@@ -27,7 +25,6 @@ spec:
             name: fastapi-service
             port:
               number: 80
-  # Optional: Add www subdomain
   - host: www.toolkeith.me
     http:
       paths:
